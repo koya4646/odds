@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100 antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* スマホでのスクロールバーをすっきり */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0f172a;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 3px;
+  }
+}
+
+/* 枠番バッジ */
+.badge-frame-1 { background-color: #ffffff; color: #0f172a; border: 1px solid #cbd5e1; }
+.badge-frame-2 { background-color: #1e293b; color: #f8fafc; border: 1px solid #475569; }
+.badge-frame-3 { background-color: #ef4444; color: #ffffff; }
+.badge-frame-4 { background-color: #3b82f6; color: #ffffff; }
+.badge-frame-5 { background-color: #eab308; color: #0f172a; }
+.badge-frame-6 { background-color: #10b981; color: #ffffff; }
+.badge-frame-7 { background-color: #f97316; color: #ffffff; }
+.badge-frame-8 { background-color: #ec4899; color: #ffffff; }
+
+/* 揺れるアニメーション */
+@keyframes pulse-gold {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.02); }
+}
+
+.animate-pulse-gold {
+  animation: pulse-gold 2s infinite ease-in-out;
+}
