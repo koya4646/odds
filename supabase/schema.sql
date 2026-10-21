@@ -100,10 +100,36 @@ CREATE INDEX IF NOT EXISTS idx_forecasts_event ON forecasts(event_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_event ON tickets(event_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_room ON transactions(room_id);
 
--- リアルタイム配信の有効化 (Supabaseダッシュボードでも切り替え可)
-ALTER PUBLICATION supabase_realtime ADD TABLE rooms;
-ALTER PUBLICATION supabase_realtime ADD TABLE participants;
-ALTER PUBLICATION supabase_realtime ADD TABLE events;
-ALTER PUBLICATION supabase_realtime ADD TABLE forecasts;
-ALTER PUBLICATION supabase_realtime ADD TABLE tickets;
-ALTER PUBLICATION supabase_realtime ADD TABLE transactions;
+-- リアルタイム配信の安全な有効化（既に登録されている場合のエラーを自動回避）
+DO $$
+BEGIN
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE rooms;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE participants;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE events;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE forecasts;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE tickets;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE transactions;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+END $$;
