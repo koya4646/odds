@@ -464,6 +464,8 @@ export async function deleteRoom(roomId: string): Promise<void> {
 
 export async function getRoom(roomId: string): Promise<Room | null> {
   const supabase = getSupabaseClient();
+  let room: Room | null = null;
+
   if (supabase) {
     try {
       const { data } = await supabase.from('rooms').select('*').eq('id', roomId).maybeSingle();
@@ -480,7 +482,7 @@ export async function getRoom(roomId: string): Promise<Room | null> {
             joinedAt: p.joined_at
           };
         });
-        return {
+        room = {
           id: data.id,
           code: data.code,
           name: data.name,
@@ -500,7 +502,14 @@ export async function getRoom(roomId: string): Promise<Room | null> {
   }
 
   const state = getLocalState();
-  return state.rooms[roomId] || null;
+  if (!room) {
+    room = state.rooms[roomId] || null;
+  } else {
+    // Supabaseから取得したroomをLocalStateにも必ずキャッシュ
+    state.rooms[roomId] = room;
+    saveLocalState(state);
+  }
+  return room;
 }
 
 // テンプレート保存
@@ -934,10 +943,14 @@ export async function processSettlement(
   event: GameEvent,
   settledTickets: BetTicket[]
 ): Promise<void> {
-  const state = getLocalState();
-  const room = state.rooms[roomId];
-  if (!room) return;
+  // getRoomでSupabaseとLocalState両方から確実に最新のroomを取得
+  const room = await getRoom(roomId);
+  if (!room) {
+    console.error('processSettlement: room not found', roomId);
+    return;
+  }
 
+  const state = getLocalState();
   const now = Date.now();
   const payoutByParticipant: Record<string, number> = {};
   const refundByParticipant: Record<string, number> = {};
@@ -972,7 +985,12 @@ export async function processSettlement(
       };
       newTxList.push(tx);
       if (supabase) {
-        await supabase.from('participants').update({ points: part.points }).eq('id', pId).eq('room_id', roomId);
+        const { error: updErr } = await supabase
+          .from('participants')
+          .update({ points: part.points })
+          .eq('id', pId)
+          .eq('room_id', roomId);
+        if (updErr) console.error('Supabase update points error:', updErr);
       }
     }
   }
@@ -996,13 +1014,19 @@ export async function processSettlement(
       };
       newTxList.push(tx);
       if (supabase) {
-        await supabase.from('participants').update({ points: part.points }).eq('id', pId).eq('room_id', roomId);
+        const { error: updErr } = await supabase
+          .from('participants')
+          .update({ points: part.points })
+          .eq('id', pId)
+          .eq('room_id', roomId);
+        if (updErr) console.error('Supabase refund points error:', updErr);
       }
     }
   }
 
   // チケット状態更新
   state.tickets[event.id] = settledTickets;
+  state.rooms[roomId] = room; // 更新された参加者ポイントをLocalStateにも反映！
 
   if (supabase) {
     try {
@@ -1015,7 +1039,7 @@ export async function processSettlement(
         }).eq('id', t.id);
       }
       if (newTxList.length > 0) {
-        await supabase.from('transactions').insert(newTxList.map(t => ({
+        const txRows = newTxList.map(t => ({
           id: t.id,
           room_id: t.roomId,
           participant_id: t.participantId,
@@ -1026,7 +1050,8 @@ export async function processSettlement(
           description: t.description,
           related_event_id: t.relatedEventId,
           created_at: t.createdAt
-        })));
+        }));
+        await supabase.from('transactions').insert(txRows);
       }
     } catch (e) {
       console.warn(e);
