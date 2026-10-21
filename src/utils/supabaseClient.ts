@@ -13,10 +13,10 @@ export function getStoredSupabaseConfig(): SupabaseConfig {
     console.error('Failed to parse Supabase config', e);
   }
 
-  // 環境変数フォールバック
+  // 環境変数およびデフォルト設定
   const env = (import.meta as any).env || {};
-  const envUrl = env.VITE_SUPABASE_URL || '';
-  const envKey = env.VITE_SUPABASE_ANON_KEY || '';
+  const envUrl = env.VITE_SUPABASE_URL || 'https://yayziqemlwcjpiegurfs.supabase.co';
+  const envKey = env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_wH_zQkd_1A1TR6FgK49Ybw_aEDLn6tL';
 
   return {
     url: envUrl,
