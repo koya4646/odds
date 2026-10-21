@@ -143,36 +143,40 @@ export function calculateInitialOdds(
  * 計算ルール：投票オッズ ＝ 投票総額 × (1 − 控除率) ÷ 対象への投票額
  * ※ 投票がない組み合わせには、初期オッズ（あれば）または基準大穴オッズを適用
  */
+/**
+ * 投票オッズの計算
+ * 計算ルール：投票オッズ ＝ 投票総額 × (1 − 控除率) ÷ 対象への投票額
+ * ※ パリミュチュエル方式に準拠し、券種（単勝/馬連/馬単）ごとのプールで独立計算
+ * ※ 投票がない組み合わせには、初期オッズ（あれば）または基準大穴オッズを適用
+ */
 export function calculateLiveOdds(
   tickets: BetTicket[],
   takeoutRate: number,
   initialOdds: Record<string, number> = {}
 ): { odds: Record<string, number>; betTotals: Record<string, number>; totalPool: number } {
   const betTotals: Record<string, number> = {};
+  const poolByType: Record<string, number> = {};
   let totalPool = 0;
 
   tickets.forEach(ticket => {
     const key = makeBetKey(ticket.betType, ticket.choices);
     betTotals[key] = (betTotals[key] || 0) + ticket.amount;
+    poolByType[ticket.betType] = (poolByType[ticket.betType] || 0) + ticket.amount;
     totalPool += ticket.amount;
   });
 
   const netMultiplier = Math.max(0, 1 - takeoutRate);
-  const netPool = totalPool * netMultiplier;
+  const odds: Record<string, number> = { ...initialOdds };
 
-  const odds: Record<string, number> = {};
-
-  // 既に初期オッズがあるキーをベースに引き継ぐ
-  Object.keys(initialOdds).forEach(key => {
-    odds[key] = initialOdds[key];
-  });
-
-  // 投票が入っているキーのオッズを更新
+  // 券種ごとに正味プールからオッズを算出
   Object.keys(betTotals).forEach(key => {
     const targetBet = betTotals[key];
-    if (targetBet > 0 && totalPool > 0) {
-      // 投票オッズ ＝ 投票総額 × (1 − 控除率) ÷ 対象への投票額
-      const calculated = netPool / targetBet;
+    const betType = key.split(':')[0]; // 'WIN', 'QUINELLA', 'EXACTA'
+    const typePool = poolByType[betType] || 0;
+
+    if (targetBet > 0 && typePool > 0) {
+      // 投票オッズ ＝ 券種別投票総額 × (1 − 控除率) ÷ 対象への投票額
+      const calculated = (typePool * netMultiplier) / targetBet;
       odds[key] = Math.max(1.0, calculated);
     }
   });
@@ -194,7 +198,7 @@ export function formatOdds(odds: number | undefined): string {
 
 /**
  * 的中判定と払い戻し計算
- * 払い戻し ＝ 投票額 × 締切時オッズ
+ * 払い戻し ＝ 投票額 × 締切時確定オッズ
  * 的中者がいない場合は、初期設定で投票ポイントを返金する
  */
 export function settleEventBets(
@@ -241,7 +245,10 @@ export function settleEventBets(
 
   const settledTickets = tickets.map(ticket => {
     const key = makeBetKey(ticket.betType, ticket.choices);
-    const odds = ticket.lockedOdds || lockedOdds[key] || 1.0;
+    // 締切時確定オッズ (lockedOdds) を最優先で適用（なければ暫定オッズ）
+    const odds = (lockedOdds && lockedOdds[key] !== undefined)
+      ? lockedOdds[key]
+      : (ticket.lockedOdds || 1.0);
 
     if (isAllRefund) {
       totalRefund += ticket.amount;
@@ -255,8 +262,8 @@ export function settleEventBets(
     }
 
     if (winningKeys.has(key)) {
-      // 払い戻し＝投票額 × 締切時オッズ
-      // ポイントは整数に丸め
+      // 払い戻し ＝ 投票額 × 締切時オッズ
+      // ポイントは整数に丸め（1pt未満切り捨て）
       const payout = Math.floor(ticket.amount * odds);
       totalPayout += payout;
       return {

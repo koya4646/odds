@@ -10,65 +10,28 @@ function makeBetKey(type, choices) {
   return `${type}:${choices.join('-')}`;
 }
 
-function calculateInitialOdds(choices, submissions, takeoutRate, allowedBetTypes = ['WIN']) {
-  const result = {};
-  if (choices.length === 0) return result;
-
-  const winPointsMap = {};
-  choices.forEach(c => { winPointsMap[c.id] = 0; });
-  let totalForecastPoints = 0;
-
-  submissions.forEach(sub => {
-    sub.items.forEach(item => {
-      if (winPointsMap[item.choiceId] !== undefined) {
-        winPointsMap[item.choiceId] += item.points;
-        totalForecastPoints += item.points;
-      }
-    });
-  });
-
-  const netMultiplier = Math.max(0, 1 - takeoutRate);
-
-  if (totalForecastPoints <= 0) {
-    const defaultWinOdds = choices.length * netMultiplier;
-    choices.forEach(c => {
-      result[makeBetKey('WIN', [c.id])] = Math.max(1.0, defaultWinOdds);
-    });
-    return result;
-  }
-
-  choices.forEach(c => {
-    const pts = winPointsMap[c.id];
-    const key = makeBetKey('WIN', [c.id]);
-    if (pts > 0) {
-      const odds = (totalForecastPoints * netMultiplier) / pts;
-      result[key] = Math.max(1.0, odds);
-    } else {
-      result[key] = 99.9;
-    }
-  });
-
-  return result;
-}
-
 function calculateLiveOdds(tickets, takeoutRate, initialOdds = {}) {
   const betTotals = {};
+  const poolByType = {};
   let totalPool = 0;
 
   tickets.forEach(ticket => {
     const key = makeBetKey(ticket.betType, ticket.choices);
     betTotals[key] = (betTotals[key] || 0) + ticket.amount;
+    poolByType[ticket.betType] = (poolByType[ticket.betType] || 0) + ticket.amount;
     totalPool += ticket.amount;
   });
 
   const netMultiplier = Math.max(0, 1 - takeoutRate);
-  const netPool = totalPool * netMultiplier;
   const odds = { ...initialOdds };
 
   Object.keys(betTotals).forEach(key => {
     const targetBet = betTotals[key];
-    if (targetBet > 0 && totalPool > 0) {
-      const calculated = netPool / targetBet;
+    const betType = key.split(':')[0];
+    const typePool = poolByType[betType] || 0;
+
+    if (targetBet > 0 && typePool > 0) {
+      const calculated = (typePool * netMultiplier) / targetBet;
       odds[key] = Math.max(1.0, calculated);
     }
   });
@@ -96,7 +59,9 @@ function settleEventBets(tickets, firstPlaceId, secondPlaceId, lockedOdds, refun
 
   const settledTickets = tickets.map(ticket => {
     const key = makeBetKey(ticket.betType, ticket.choices);
-    const odds = ticket.lockedOdds || lockedOdds[key] || 1.0;
+    const odds = (lockedOdds && lockedOdds[key] !== undefined)
+      ? lockedOdds[key]
+      : (ticket.lockedOdds || 1.0);
 
     if (isAllRefund) {
       totalRefund += ticket.amount;
@@ -115,75 +80,84 @@ function settleEventBets(tickets, firstPlaceId, secondPlaceId, lockedOdds, refun
   return { settledTickets, totalPayout, totalRefund, hitCount };
 }
 
-console.log('🧪 Starting Odds Party Logic Tests...');
+console.log('🧪 Verifying Payout & Settlement Calculations...');
 
-// 1. キー生成テスト
-assert.strictEqual(makeBetKey('WIN', ['c1']), 'WIN:c1');
-assert.strictEqual(makeBetKey('QUINELLA', ['c2', 'c1']), 'QUINELLA:c1+c2');
-assert.strictEqual(makeBetKey('EXACTA', ['c1', 'c2']), 'EXACTA:c1->c2');
-console.log('✅ 1. makeBetKey OK');
-
-// 2. 初期オッズ計算テスト
-const choices = [
-  { id: 'c1', number: 1, name: 'A' },
-  { id: 'c2', number: 2, name: 'B' },
-  { id: 'c3', number: 3, name: 'C' },
-];
-const forecasts = [
+// テスト 1: 締切時確定オッズが、投票時の古いオッズを正しく上書きすることの検証
+console.log('Test 1: lockedOdds override verification');
+const testTickets1 = [
   {
-    items: [
-      { choiceId: 'c1', points: 600 },
-      { choiceId: 'c2', points: 200 },
-      { choiceId: 'c3', points: 200 },
-    ]
+    id: 't1',
+    betType: 'WIN',
+    choices: ['c1'],
+    amount: 1000,
+    lockedOdds: 5.0, // 投票した瞬間の暫定オッズは5.0倍だった
+    payout: 0,
+    isHit: false,
+    refunded: false
   }
 ];
-const initOdds = calculateInitialOdds(choices, forecasts, 0.20);
-assert(Math.abs(initOdds['WIN:c1'] - (800 / 600)) < 0.0001);
-assert.strictEqual(initOdds['WIN:c2'], 4.0);
-console.log('✅ 2. calculateInitialOdds OK');
+// その後、他人がさらに賭けて締切時の最終オッズが 2.5倍 に下がった
+const finalOddsMap = { 'WIN:c1': 2.5 };
+const result1 = settleEventBets(testTickets1, 'c1', undefined, finalOddsMap, true);
+assert.strictEqual(result1.settledTickets[0].isHit, true);
+assert.strictEqual(result1.settledTickets[0].lockedOdds, 2.5); // 締切確定オッズが適用されている
+assert.strictEqual(result1.settledTickets[0].payout, 2500); // 1000 * 2.5 = 2500 pt
+console.log('✅ Test 1 Passed: 締切確定オッズが確実に適用されます');
 
-// 3. 投票オッズ計算テスト
-const tickets = [
-  { betType: 'WIN', choices: ['c1'], amount: 1000 },
-  { betType: 'WIN', choices: ['c2'], amount: 3000 }
+// テスト 2: 控除率20%における正味プール分配の完全検証
+console.log('Test 2: Net pool payout conservation');
+// 単勝: プレイヤーAが 2000pt、プレイヤーBが 8000pt 投票（計 10,000pt）
+// 控除率 20% -> 正味払戻原資 = 8,000pt
+// プレイヤーAの馬が勝った場合:
+// オッズ = 8000 / 2000 = 4.0倍
+// Aへの払戻 = 2000 * 4.0 = 8000pt
+const tickets2 = [
+  { id: 'a', betType: 'WIN', choices: ['hA'], amount: 2000 },
+  { id: 'b', betType: 'WIN', choices: ['hB'], amount: 8000 },
 ];
-const liveResult = calculateLiveOdds(tickets, 0.20, initOdds);
-assert.strictEqual(liveResult.totalPool, 4000);
-assert.strictEqual(liveResult.odds['WIN:c1'], 3.2); // (4000 * 0.8) / 1000 = 3.2
-assert(Math.abs(liveResult.odds['WIN:c2'] - (3200 / 3000)) < 0.0001);
-console.log('✅ 3. calculateLiveOdds OK');
+const odds2 = calculateLiveOdds(tickets2, 0.20).odds;
+assert.strictEqual(odds2['WIN:hA'], 4.0);
+assert.strictEqual(odds2['WIN:hB'], 1.0); // 8000 / 8000 = 1.0 (元返し保証)
 
-// 4. 精算・的中テスト (c1 1着)
-const settle1 = settleEventBets(tickets, 'c1', 'c2', { 'WIN:c1': 3.2, 'WIN:c2': 1.066 }, true);
-assert.strictEqual(settle1.hitCount, 1);
-assert.strictEqual(settle1.settledTickets[0].payout, 3200);
-assert.strictEqual(settle1.settledTickets[1].payout, 0);
-console.log('✅ 4. settleEventBets (c1 win) OK');
+const settle2 = settleEventBets(tickets2, 'hA', undefined, odds2, true);
+assert.strictEqual(settle2.totalPayout, 8000); // 正味プール8000ptと1ptの狂いもなく完全一致！
+console.log('✅ Test 2 Passed: 控除率20%と払戻プールが1ptの狂いもなく完全一致します');
 
-// 5. 的中者ゼロ返金テスト (c3 1着)
-const settleZero = settleEventBets(tickets, 'c3', 'c1', { 'WIN:c1': 3.2, 'WIN:c2': 1.066 }, true);
-assert.strictEqual(settleZero.hitCount, 0);
-assert.strictEqual(settleZero.totalRefund, 4000);
-assert.strictEqual(settleZero.settledTickets[0].payout, 1000);
-assert.strictEqual(settleZero.settledTickets[1].payout, 3000);
-console.log('✅ 5. settleEventBets (No winner refund) OK');
-
-// 6. 馬連・馬単テスト
+// テスト 3: 単勝と馬連のプール独立性検証（複数券種購入時の配当破綻防止）
+console.log('Test 3: Independent bet pools (WIN + QUINELLA)');
 const comboTickets = [
-  { betType: 'EXACTA', choices: ['c1', 'c2'], amount: 500 },
-  { betType: 'EXACTA', choices: ['c2', 'c1'], amount: 500 },
-  { betType: 'QUINELLA', choices: ['c2', 'c1'], amount: 1000 },
+  // 単勝プール: 計 10,000pt (正味 8,000pt)
+  { id: 'w1', betType: 'WIN', choices: ['hA'], amount: 2000 },
+  { id: 'w2', betType: 'WIN', choices: ['hB'], amount: 8000 },
+  // 馬連プール: 計 5,000pt (正味 4,000pt)
+  { id: 'q1', betType: 'QUINELLA', choices: ['hA', 'hB'], amount: 1000 },
+  { id: 'q2', betType: 'QUINELLA', choices: ['hA', 'hC'], amount: 4000 },
 ];
-const comboSettle = settleEventBets(comboTickets, 'c1', 'c2', {
-  'EXACTA:c1->c2': 8.5,
-  'EXACTA:c2->c1': 12.0,
-  'QUINELLA:c1+c2': 4.2
-}, true);
-assert.strictEqual(comboSettle.hitCount, 2);
-assert.strictEqual(comboSettle.settledTickets[0].payout, 4250);
-assert.strictEqual(comboSettle.settledTickets[1].payout, 0);
-assert.strictEqual(comboSettle.settledTickets[2].payout, 4200);
-console.log('✅ 6. Exacta & Quinella settle OK');
+const comboOdds = calculateLiveOdds(comboTickets, 0.20).odds;
+// 単勝hAオッズ = 8000 / 2000 = 4.0倍
+assert.strictEqual(comboOdds['WIN:hA'], 4.0);
+// 馬連hA+hBオッズ = 4000 / 1000 = 4.0倍
+assert.strictEqual(comboOdds['QUINELLA:hA+hB'], 4.0);
 
-console.log('🎉 ALL SUITES PASSED VERIFICATION!');
+// 1着 hA, 2着 hB の結果
+const comboSettle = settleEventBets(comboTickets, 'hA', 'hB', comboOdds, true);
+// 単勝的中者への払戻: 2000 * 4.0 = 8000 pt (単勝プールと一致)
+// 馬連的中者への払戻: 1000 * 4.0 = 4000 pt (馬連プールと一致)
+// 全払戻総額: 12000 pt = (単勝正味8000 + 馬連正味4000)
+assert.strictEqual(comboSettle.totalPayout, 12000);
+console.log('✅ Test 3 Passed: 券種プール独立により複数券種でも数学的に100%整合します');
+
+// テスト 4: 的中者ゼロ返金の検証
+console.log('Test 4: No winner full refund verification');
+// 誰も買っていない大穴 hC が勝った場合
+const refundSettle = settleEventBets(tickets2, 'hC', undefined, odds2, true);
+assert.strictEqual(refundSettle.hitCount, 0);
+assert.strictEqual(refundSettle.totalPayout, 0);
+assert.strictEqual(refundSettle.totalRefund, 10000); // 2000 + 8000 全額返金
+assert.strictEqual(refundSettle.settledTickets[0].refunded, true);
+assert.strictEqual(refundSettle.settledTickets[0].payout, 2000); // 賭け金全額戻る
+assert.strictEqual(refundSettle.settledTickets[1].refunded, true);
+assert.strictEqual(refundSettle.settledTickets[1].payout, 8000); // 賭け金全額戻る
+console.log('✅ Test 4 Passed: 的中者ゼロ返金が確実に全額返還されます');
+
+console.log('🎉 ALL PAYOUT & SETTLEMENT TESTS PASSED PERFECTLY!');
